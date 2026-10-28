@@ -1,0 +1,43 @@
+# Single-server deployment (e.g. a small VPS in the EU).
+#   cp .env.example .env.production   # fill in real values
+#   docker compose --env-file .env.production up -d --build
+# Caddy terminates HTTPS automatically for the domain in Caddyfile.
+# Untested in the development environment (no Docker daemon) — verify before launch.
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: flatmarket
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: flatmarket
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on: [db]
+    env_file: .env.production
+    environment:
+      DATABASE_URL: postgresql://flatmarket:${POSTGRES_PASSWORD}@db:5432/flatmarket?schema=public
+      STORAGE_DRIVER: ${STORAGE_DRIVER:-local}
+      STORAGE_LOCAL_DIR: /data/storage
+      TRUST_PROXY: "true"
+    volumes:
+      - uploads:/data/storage
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on: [app]
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+
+volumes:
+  pgdata:
+  uploads:
+  caddy_data:

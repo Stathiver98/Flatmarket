@@ -1,0 +1,437 @@
+// Flatmarket database schema.
+// Run `npm run db:migrate` after changing this file.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum WorkspaceType {
+  INDIVIDUAL
+  AGENCY
+}
+
+enum WorkspaceRole {
+  OWNER
+  MEMBER
+}
+
+enum ListingStatus {
+  DRAFT
+  AWAITING_REVIEW
+  READY
+  PUBLISHED
+  ARCHIVED
+}
+
+enum Visibility {
+  PRIVATE
+  UNLISTED
+  PUBLIC
+}
+
+enum ListingPurpose {
+  SALE
+  RENT
+}
+
+enum PropertyType {
+  APARTMENT
+  MAISONETTE
+  DETACHED_HOUSE
+  STUDIO
+  OTHER_RESIDENTIAL
+}
+
+enum RoomType {
+  LIVING_ROOM
+  KITCHEN
+  BEDROOM
+  BATHROOM
+  BALCONY
+  EXTERIOR
+  OTHER
+}
+
+enum LocationPrecision {
+  REGION
+  MUNICIPALITY
+  AREA
+  EXACT
+}
+
+enum VariantKind {
+  ENHANCED
+  STAGED
+}
+
+enum VariantStatus {
+  PENDING
+  PROCESSING
+  SUCCEEDED
+  FAILED
+}
+
+enum ContentSource {
+  MANUAL
+  AI
+  AI_EDITED
+}
+
+enum DeliveryStatus {
+  NOT_CONFIGURED
+  SENT
+  FAILED
+}
+
+enum RequestStatus {
+  NEW
+  IN_PROGRESS
+  DONE
+  ARCHIVED
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  name         String
+  passwordHash String
+  role         UserRole  @default(USER)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  sessions        Session[]
+  memberships     Membership[]
+  resetTokens     PasswordResetToken[]
+  listingsCreated Listing[]            @relation("ListingCreatedBy")
+  invitationsSent Invitation[]         @relation("InvitationInvitedBy")
+}
+
+// Session tokens are never stored in plain text: `id` is the SHA-256 hash of the cookie value.
+model Session {
+  id        String   @id
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model PasswordResetToken {
+  id        String    @id // SHA-256 hash of the token
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+model Workspace {
+  id             String        @id @default(cuid())
+  type           WorkspaceType @default(INDIVIDUAL)
+  name           String
+  // Public branding and default contact details, shown on presentation pages and brochures.
+  displayName    String
+  logoKey        String?
+  contactName    String?
+  contactEmail   String?
+  contactPhone   String?
+  website        String?
+  registryNumber String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  memberships Membership[]
+  listings    Listing[]
+  invitations Invitation[]
+}
+
+model Membership {
+  id          String        @id @default(cuid())
+  workspaceId String
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role        WorkspaceRole @default(MEMBER)
+  createdAt   DateTime      @default(now())
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
+}
+
+model Invitation {
+  id          String    @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  email       String
+  tokenHash   String    @unique
+  invitedById String
+  invitedBy   User      @relation("InvitationInvitedBy", fields: [invitedById], references: [id], onDelete: Cascade)
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([workspaceId])
+}
+
+model Listing {
+  id          String        @id @default(cuid())
+  reference   String        @unique
+  workspaceId String
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdById String
+  createdBy   User          @relation("ListingCreatedBy", fields: [createdById], references: [id])
+  status      ListingStatus @default(DRAFT)
+  visibility  Visibility    @default(PRIVATE)
+  // Random, unguessable token used for link-only sharing and public asset URLs.
+  shareToken  String        @unique
+  slug        String?       @unique
+
+  // Step 1: basic details
+  purpose           ListingPurpose?
+  propertyType      PropertyType?
+  title             String?
+  region            String?
+  municipality      String?
+  neighborhood      String?
+  address           String? // private by default
+  postalCode        String?
+  locationPrecision LocationPrecision @default(AREA)
+  price             Int?
+  priceOnRequest    Boolean           @default(false)
+  areaSqm           Float?
+  bedrooms          Int?
+  bathrooms         Int?
+  floor             String?
+  availability      String?
+  availableFrom     DateTime?
+
+  // Step 2: characteristics (validated by src/lib/listing/schema.ts)
+  details Json @default("{}")
+
+  externalTourUrl String?
+
+  // Contact shown on the presentation page (defaults copied from the workspace)
+  contactName      String?
+  contactEmail     String?
+  contactPhone     String?
+  showContactEmail Boolean @default(true)
+  showContactPhone Boolean @default(true)
+  enquiriesEnabled Boolean @default(true)
+  showBranding     Boolean @default(true)
+
+  // Review and publication
+  factsConfirmedAt      DateTime?
+  approvedAt            DateTime?
+  approvedById          String?
+  publishedAt           DateTime?
+  lastPublishedAt       DateTime?
+  publishedSnapshot     Json?
+  hasUnpublishedChanges Boolean   @default(false)
+  archivedAt            DateTime?
+  adminNotes            String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  photos     Photo[]
+  floorPlans FloorPlan[]
+  content    ContentSection[]
+  enquiries  Enquiry[]
+  events     ListingEvent[]
+  aiJobs     AiJob[]
+
+  @@index([workspaceId, status])
+}
+
+model Photo {
+  id                String    @id @default(cuid())
+  listingId         String
+  listing           Listing   @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  // The original upload is stored untouched; display/thumb are EXIF-stripped derivatives.
+  originalKey       String
+  displayKey        String
+  thumbKey          String
+  originalFilename  String
+  mimeType          String
+  sizeBytes         Int
+  width             Int
+  height            Int
+  position          Int
+  room              RoomType?
+  roomLabel         String?
+  caption           String?
+  isCover           Boolean   @default(false)
+  includeInListing  Boolean   @default(true)
+  // null = use the original photo
+  selectedVariantId String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  variants PhotoVariant[]
+
+  @@index([listingId, position])
+}
+
+model PhotoVariant {
+  id           String        @id @default(cuid())
+  photoId      String
+  photo        Photo         @relation(fields: [photoId], references: [id], onDelete: Cascade)
+  kind         VariantKind
+  status       VariantStatus @default(PENDING)
+  provider     String
+  operation    Json          @default("{}")
+  storageKey   String?
+  displayKey   String?
+  thumbKey     String?
+  width        Int?
+  height       Int?
+  errorMessage String?
+  attempts     Int           @default(0)
+  // Digitally staged images must be explicitly reviewed before they can be used.
+  approvedAt   DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@index([photoId])
+}
+
+model FloorPlan {
+  id               String   @id @default(cuid())
+  listingId        String
+  listing          Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  label            String?
+  originalKey      String
+  displayKey       String
+  thumbKey         String
+  originalFilename String
+  mimeType         String
+  sizeBytes        Int
+  width            Int
+  height           Int
+  position         Int      @default(0)
+  createdAt        DateTime @default(now())
+
+  hotspots FloorPlanHotspot[]
+}
+
+// A user-placed marker on an uploaded floor plan. Coordinates are relative (0..1).
+model FloorPlanHotspot {
+  id          String    @id @default(cuid())
+  floorPlanId String
+  floorPlan   FloorPlan @relation(fields: [floorPlanId], references: [id], onDelete: Cascade)
+  x           Float
+  y           Float
+  room        RoomType
+  roomLabel   String?
+  createdAt   DateTime  @default(now())
+}
+
+model ContentSection {
+  id          String        @id @default(cuid())
+  listingId   String
+  listing     Listing       @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  key         String // headline | summary | description | features | social
+  lang        String // el | en
+  text        String
+  source      ContentSource @default(MANUAL)
+  approved    Boolean       @default(false)
+  approvedAt  DateTime?
+  aiModel     String?
+  generatedAt DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@unique([listingId, key, lang])
+}
+
+model Enquiry {
+  id             String         @id @default(cuid())
+  listingId      String
+  listing        Listing        @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  name           String
+  email          String
+  phone          String?
+  message        String
+  consentAt      DateTime
+  deliveryStatus DeliveryStatus @default(NOT_CONFIGURED)
+  deliveryError  String?
+  ipHash         String?
+  readAt         DateTime?
+  createdAt      DateTime       @default(now())
+
+  @@index([listingId, createdAt])
+}
+
+model ContactRequest {
+  id             String         @id @default(cuid())
+  kind           String // DEMO | PRICING | GENERAL | CAPTURE | SERVICE
+  name           String
+  email          String
+  phone          String?
+  company        String?
+  packageName    String?
+  message        String
+  status         RequestStatus  @default(NEW)
+  deliveryStatus DeliveryStatus @default(NOT_CONFIGURED)
+  deliveryError  String?
+  ipHash         String?
+  userId         String?
+  listingId      String?
+  internalNotes  String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@index([status, createdAt])
+}
+
+model ListingEvent {
+  id        String   @id @default(cuid())
+  listingId String
+  listing   Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  actorId   String?
+  type      String
+  data      Json?
+  createdAt DateTime @default(now())
+
+  @@index([listingId, createdAt])
+}
+
+// Processing log for AI/image providers. Never stores prompts, outputs or secrets.
+model AiJob {
+  id           String   @id @default(cuid())
+  listingId    String?
+  listing      Listing? @relation(fields: [listingId], references: [id], onDelete: SetNull)
+  kind         String // TEXT_GENERATION | PHOTO_ENHANCEMENT | VIRTUAL_STAGING
+  provider     String
+  model        String?
+  status       String // SUCCEEDED | FAILED
+  errorCode    String?
+  durationMs   Int?
+  inputTokens  Int?
+  outputTokens Int?
+  createdAt    DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+model RateLimit {
+  key         String   @id
+  windowStart DateTime
+  count       Int
+}
